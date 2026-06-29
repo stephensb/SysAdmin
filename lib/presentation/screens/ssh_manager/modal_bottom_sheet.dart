@@ -5,6 +5,7 @@ import 'package:sysadmin/core/utils/util.dart';
 import 'package:sysadmin/core/widgets/button.dart';
 import 'package:sysadmin/data/services/connection_manager.dart';
 import 'package:sysadmin/presentation/screens/sftp/index.dart';
+import 'package:sysadmin/presentation/screens/ssh_manager/port_forward_screen.dart';
 import 'package:sysadmin/presentation/screens/terminal/index.dart';
 
 import '../../../data/models/ssh_connection.dart';
@@ -299,6 +300,14 @@ class _SSHConnectionDetailsSheetState extends State<SSHConnectionDetailsSheet> {
                         onTap: () => Navigator.push(
                           context,
                           CupertinoPageRoute(builder: (context) => SftpExplorerScreen(connection: currentConnection))
+                        ),
+                      ),
+                      _buildActionButton(
+                        icon: Icons.swap_horiz,
+                        title: 'Port Forwarding',
+                        onTap: () => Navigator.push(
+                          context,
+                          CupertinoPageRoute(builder: (context) => PortForwardScreen(connection: currentConnection))
                         ),
                       ),
                       _buildActionButton(

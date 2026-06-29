@@ -5,8 +5,10 @@ import 'package:dartssh2/dartssh2.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:sysadmin/core/utils/color_extension.dart';
+import 'package:sysadmin/core/utils/ssh_key_generator.dart';
 import 'package:sysadmin/core/utils/util.dart';
 import 'package:sysadmin/core/widgets/ios_scaffold.dart';
 import 'package:sysadmin/data/models/ssh_connection.dart';
@@ -40,6 +42,7 @@ class _AddConnectionFormState extends ConsumerState<AddConnectionForm> {
   bool _usePassword = true;
   bool _isPasswordVisible = true;
   String? _errorMessage;
+  String? _generatedPublicKey;
   static const int connectionTimeout = 30; // seconds
 
   @override
@@ -108,6 +111,139 @@ class _AddConnectionFormState extends ConsumerState<AddConnectionForm> {
         _errorMessage = 'Error reading private key file: ${e.toString()}';
       });
     }
+  }
+
+  // Dialog to generate a new RSA SSH key pair locally
+  Future<void> _showGenerateKeyDialog() async {
+    int keySize = 4096;
+    final TextEditingController commentController = TextEditingController(
+      text: usernameController.text.isNotEmpty && hostController.text.isNotEmpty
+          ? '${usernameController.text}@${hostController.text}'
+          : '',
+    );
+    bool isGenerating = false;
+    String? dialogError;
+
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (BuildContext context) {
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            return AlertDialog(
+              title: const Text('Generate SSH Key'),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  if (isGenerating) ...[
+                    const Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        ),
+                        SizedBox(width: 12),
+                        Flexible(child: Text('Generating key, please wait...')),
+                      ],
+                    ),
+                  ] else ...[
+                    const Text('Key size'),
+                    const SizedBox(height: 8),
+                    DropdownButton<int>(
+                      value: keySize,
+                      isExpanded: true,
+                      items: const [
+                        DropdownMenuItem(value: 2048, child: Text('RSA 2048-bit')),
+                        DropdownMenuItem(value: 3072, child: Text('RSA 3072-bit')),
+                        DropdownMenuItem(value: 4096, child: Text('RSA 4096-bit')),
+                      ],
+                      onChanged: (value) => setDialogState(() => keySize = value ?? 4096),
+                    ),
+                    const SizedBox(height: 16),
+                    TextField(
+                      controller: commentController,
+                      decoration: InputDecoration(
+                        labelText: 'Comment (optional)',
+                        hintText: 'user@host',
+                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                      ),
+                    ),
+                    if (dialogError != null) ...[
+                      const SizedBox(height: 12),
+                      Container(
+                        padding: const EdgeInsets.all(8),
+                        decoration: BoxDecoration(
+                          color: Colors.red.shade100.useOpacity(0.22),
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        child: Text(
+                          dialogError!,
+                          style: TextStyle(color: Colors.red.shade900, fontSize: 12),
+                        ),
+                      ),
+                    ],
+                  ],
+                ],
+              ),
+              actions: [
+                TextButton(
+                  onPressed: isGenerating ? null : () => Navigator.pop(context),
+                  child: Text('Cancel', style: TextStyle(color: Theme.of(context).colorScheme.error)),
+                ),
+                TextButton(
+                  onPressed: isGenerating
+                      ? null
+                      : () async {
+                          setDialogState(() {
+                            isGenerating = true;
+                            dialogError = null;
+                          });
+
+                          try {
+                            final key = await SshKeyGenerator.generateRsaKey(
+                              bits: keySize,
+                              comment: commentController.text,
+                            );
+
+                            // Sanity check that dartssh2 can parse what we generated.
+                            SSHKeyPair.fromPem(key.privateKeyPem);
+
+                            setState(() {
+                              privateKeyController.text = key.privateKeyPem;
+                              _generatedPublicKey = key.publicKeyOpenSsh;
+                              _usePassword = false;
+                              _errorMessage = null;
+                            });
+
+                            if (context.mounted) Navigator.pop(context);
+                            if (mounted) {
+                              Util.showMsg(
+                                context: this.context,
+                                msg: 'SSH key generated. Copy the public key to your server.',
+                                bgColour: Colors.green,
+                              );
+                            }
+                          }
+                          catch (e) {
+                            setDialogState(() {
+                              isGenerating = false;
+                              dialogError = 'Failed to generate key: ${e.toString()}';
+                            });
+                          }
+                        },
+                  child: const Text('Generate'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+
+    commentController.dispose();
   }
 
   // Handle the private key content, checking if it's encrypted or not
@@ -673,6 +809,7 @@ class _AddConnectionFormState extends ConsumerState<AddConnectionForm> {
               // If using private key authentication, show private key field
               else
                 Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
                     Row(
                       children: [
@@ -696,6 +833,83 @@ class _AddConnectionFormState extends ConsumerState<AddConnectionForm> {
                         ),
                       ],
                     ),
+
+                    const SizedBox(height: 10),
+
+                    // Generate a brand new key pair on the device
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: CupertinoButton(
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                        color: CupertinoColors.systemGrey5,
+                        onPressed: _showGenerateKeyDialog,
+                        child: const Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(CupertinoIcons.add_circled, color: CupertinoColors.activeBlue, size: 20),
+                            SizedBox(width: 6),
+                            Text('Generate Key', style: TextStyle(color: CupertinoColors.activeBlue)),
+                          ],
+                        ),
+                      ),
+                    ),
+
+                    // Show the generated public key so the user can install it server-side
+                    if (_generatedPublicKey != null) ...[
+                      const SizedBox(height: 12),
+                      Container(
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: CupertinoColors.systemGrey6,
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(color: CupertinoColors.systemGrey4),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              children: [
+                                Expanded(
+                                  child: Text(
+                                    'Public Key',
+                                    style: theme.textTheme.titleSmall,
+                                  ),
+                                ),
+                                CupertinoButton(
+                                  padding: EdgeInsets.zero,
+                                  minSize: 0,
+                                  onPressed: () async {
+                                    await Clipboard.setData(ClipboardData(text: _generatedPublicKey!));
+                                    if (mounted) {
+                                      Util.showMsg(context: context, msg: 'Public key copied to clipboard');
+                                    }
+                                  },
+                                  child: const Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Icon(CupertinoIcons.doc_on_clipboard, size: 16, color: CupertinoColors.activeBlue),
+                                      SizedBox(width: 4),
+                                      Text('Copy', style: TextStyle(color: CupertinoColors.activeBlue)),
+                                    ],
+                                  ),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 6),
+                            const Text(
+                              'Add this to ~/.ssh/authorized_keys on the server.',
+                              style: TextStyle(fontSize: 11, color: CupertinoColors.systemGrey),
+                            ),
+                            const SizedBox(height: 8),
+                            SelectableText(
+                              _generatedPublicKey!,
+                              style: const TextStyle(fontSize: 11, fontFamily: 'monospace'),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
                   ],
                 ),
 
