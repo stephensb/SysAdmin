@@ -4,6 +4,8 @@ import 'dart:collection';
 import 'package:dartssh2/dartssh2.dart';
 import 'package:flutter/foundation.dart';
 
+import 'ssh_command_client.dart';
+
 class _SSHTask {
   final String command;
   final Completer<String> completer;
@@ -12,12 +14,12 @@ class _SSHTask {
 }
 
 class SSHSessionManager {
-  SSHClient? _client;
+  SshCommandClient? _client;
   bool _isExecuting = false;
   bool _isReconnecting = false;
   final _executionQueue = Queue<_SSHTask>();
 
-  void setClient(SSHClient? client) {
+  void setClient(SshCommandClient? client) {
     _client = client;
     // Process any pending tasks when client is set
     if (_client != null) {

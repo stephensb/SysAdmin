@@ -3,6 +3,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:sysadmin/data/models/ssh_connection.dart';
 import 'package:sysadmin/data/services/connection_manager.dart';
+import 'package:sysadmin/data/services/ssh_command_client.dart';
 import 'package:sysadmin/data/services/ssh_session_manager.dart';
 
 // Provider for ConnectionManager instance
@@ -106,7 +107,7 @@ final sshClientProvider = FutureProvider.autoDispose<SSHClient?>((ref) async {
         );
 
         // Set the client in the session manager
-        sessionManager.setClient(client);
+        sessionManager.setClient(DartSshCommandClient(client));
 
         ref.onDispose(() {
           // Let the session manager handle the client lifecycle

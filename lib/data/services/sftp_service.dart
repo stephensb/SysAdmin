@@ -2,21 +2,34 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:dartssh2/dartssh2.dart';
+import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as path;
 
 import '../models/file_details.dart';
 import '../models/remote_file.dart';
 import '../models/sftp_permission_models.dart';
 import '../models/ssh_connection.dart';
+import 'sftp_file_backend.dart';
+import 'ssh_command_client.dart';
 
 class SftpService {
-  SftpClient? _sftpClient;
-  SSHClient? _sshClient;
+  SftpFileBackend? _files;
+  SshCommandClient? _command;
+
+  SftpService();
+
+  /// Test seam: inject in-memory backends instead of connecting over the network.
+  @visibleForTesting
+  SftpService.withBackends({
+    required SftpFileBackend files,
+    required SshCommandClient command,
+  })  : _files = files,
+        _command = command;
 
   // Method to establish connection
   Future<void> connect(SSHConnection connection) async {
     try {
-      _sshClient = SSHClient(
+      final client = SSHClient(
         await SSHSocket.connect(
           connection.host,
           connection.port,
@@ -27,15 +40,16 @@ class SftpService {
         identities: connection.privateKey != null ? SSHKeyPair.fromPem(connection.privateKey!) : null,
       );
 
-      _sftpClient = await _sshClient!.sftp();
-    } 
+      _command = DartSshCommandClient(client);
+      _files = DartSftpFileBackend(await client.sftp());
+    }
     catch (e) {
       throw Exception('Failed to connect to SFTP server: $e');
     }
   }
 
   // Check if connected
-  bool get isConnected => _sftpClient != null && _sshClient != null;
+  bool get isConnected => _files != null && _command != null;
 
   // Ensure connection is established
   void _ensureConnected() {
@@ -48,8 +62,7 @@ class SftpService {
   Future<List<RemoteFile>> listDirectory(String path) async {
     _ensureConnected();
     try {
-      final list = await _sftpClient!.listdir(path);
-      return list.map((file) => RemoteFile.fromStat(file, path)).toList();
+      return await _files!.listDirectory(path);
     }
     catch (e) {
       throw Exception('Failed to list directory contents: $e');
@@ -60,18 +73,7 @@ class SftpService {
   Future<RemoteFile> getFileInfo(String path) async {
     _ensureConnected();
     try {
-      final fileName = path.split('/').last;
-      final parentPath = path.substring(0, path.length - fileName.length);
-      final stat = await _sftpClient!.stat(path);
-
-      // Create SftpName with required attr parameter
-      final sftpName = SftpName(
-        filename: fileName,
-        longname: stat.toString(),
-        attr: stat,
-      );
-
-      return RemoteFile.fromStat(sftpName, parentPath);
+      return await _files!.stat(path);
     }
     catch (e) {
       throw Exception('Failed to get file info: $e');
@@ -82,7 +84,7 @@ class SftpService {
   Future<void> renameFile(String oldPath, String newPath) async {
     _ensureConnected();
     try {
-      await _sftpClient!.rename(oldPath, newPath);
+      await _files!.rename(oldPath, newPath);
     }
     catch (e) {
       throw Exception('Failed to rename file: $e');
@@ -93,18 +95,8 @@ class SftpService {
   Future<void> copyFile(String sourcePath, String destinationPath) async {
     _ensureConnected();
     try {
-      // Read source file
-      final sourceFile = await _sftpClient!.open(sourcePath, mode: SftpFileOpenMode.read);
-      final data = await sourceFile.readBytes();
-      await sourceFile.close();
-
-      // Write to destination
-      final destFile = await _sftpClient!.open(
-        destinationPath,
-        mode: SftpFileOpenMode.create | SftpFileOpenMode.write,
-      );
-      await destFile.writeBytes(data);
-      await destFile.close();
+      final data = await _files!.readFile(sourcePath);
+      await _files!.writeFile(destinationPath, data);
     }
     catch (e) {
       throw Exception('Failed to copy file: $e');
@@ -126,7 +118,7 @@ class SftpService {
   Future<void> deleteFile(String path) async {
     _ensureConnected();
     try {
-      await _sftpClient!.remove(path);
+      await _files!.remove(path);
     } catch (e) {
       throw Exception('Failed to delete file: $e');
     }
@@ -138,13 +130,7 @@ class SftpService {
     try {
       final file = File(localPath);
       final data = await file.readAsBytes();
-
-      final remoteFile = await _sftpClient!.open(
-        remotePath,
-        mode: SftpFileOpenMode.create | SftpFileOpenMode.write,
-      );
-      await remoteFile.writeBytes(data);
-      await remoteFile.close();
+      await _files!.writeFile(remotePath, data);
     } catch (e) {
       throw Exception('Failed to upload file: $e');
     }
@@ -164,9 +150,7 @@ class SftpService {
         await directory.create(recursive: true);
       }
 
-      final remoteFile = await _sftpClient!.open(remotePath, mode: SftpFileOpenMode.read);
-      final data = await remoteFile.readBytes();
-      await remoteFile.close();
+      final data = await _files!.readFile(remotePath);
 
       final file = File(localPath);
       await file.writeAsBytes(data);
@@ -182,12 +166,12 @@ class SftpService {
     try {
       // Execute 'file' command and convert result to string
       final fileResult = utf8.decode(
-          await _sshClient!.run('file "$path"')
+          await _command!.run('file "$path"')
       );
 
       // Execute 'stat' command and convert result to string
       final statResult = utf8.decode(
-          await _sshClient!.run('stat "$path"')
+          await _command!.run('stat "$path"')
       );
 
       return FileDetails.fromCommandOutputs(
@@ -204,10 +188,10 @@ class SftpService {
   // Cleanup resources
   Future<void> disconnect() async {
     try {
-      _sftpClient?.close();
-      _sshClient?.close();
-      _sftpClient = null;
-      _sshClient = null;
+      _files?.close();
+      _command?.close();
+      _files = null;
+      _command = null;
     } catch (e) {
       throw Exception('Failed to disconnect: $e');
     }
@@ -221,7 +205,7 @@ class SftpService {
           ? 'chmod -R $permissions "$path"'
           : 'chmod $permissions "$path"';
 
-      final result = await _sshClient!.run(command);
+      final result = await _command!.run(command);
       if (result.isNotEmpty) {
         throw Exception(utf8.decode(result));
       }
@@ -234,7 +218,7 @@ class SftpService {
   Future<List<UnixUser>> getUsers() async {
     _ensureConnected();
     try {
-      final result = await _sshClient!.run('cat /etc/passwd');
+      final result = await _command!.run('cat /etc/passwd');
       return utf8.decode(result)
           .split('\n')
           .where((line) => line.isNotEmpty)
@@ -249,7 +233,7 @@ class SftpService {
   Future<List<UnixGroup>> getGroups() async {
     _ensureConnected();
     try {
-      final result = await _sshClient!.run('cat /etc/group');
+      final result = await _command!.run('cat /etc/group');
       return utf8.decode(result)
           .split('\n')
           .where((line) => line.isNotEmpty)
@@ -268,7 +252,7 @@ class SftpService {
           ? 'chown -R $owner:$group "$path"'
           : 'chown $owner:$group "$path"';
 
-      final result = await _sshClient!.run(command);
+      final result = await _command!.run(command);
       if (result.isNotEmpty) {
         throw Exception(utf8.decode(result));
       }
@@ -282,7 +266,7 @@ class SftpService {
     _ensureConnected();
     try {
       final command = 'touch $path';
-      final result = await _sshClient!.run(command);
+      final result = await _command!.run(command);
       if (result.isNotEmpty) throw Exception(utf8.decode(result));
     }
     catch(e) {
@@ -295,7 +279,7 @@ class SftpService {
     _ensureConnected();
     try {
       final command = 'mkdir -p $path';
-      final result = await _sshClient!.run(command);
+      final result = await _command!.run(command);
       if (result.isNotEmpty) throw Exception(utf8.decode(result));
     }
     catch(e) {
