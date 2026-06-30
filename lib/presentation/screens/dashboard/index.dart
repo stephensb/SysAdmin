@@ -444,7 +444,6 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
                 label: Label(
                     label: "Details",
                     onTap: () {
-                      // TODO: Implement the System Monitor Screen and link it here and in AppDrawer
                       Navigator.push(
                         context,
                         CupertinoPageRoute(

@@ -4,6 +4,7 @@ import 'package:sysadmin/core/utils/color_extension.dart';
 import 'package:sysadmin/core/utils/util.dart';
 import 'package:sysadmin/core/widgets/button.dart';
 import 'package:sysadmin/data/services/connection_manager.dart';
+import 'package:sysadmin/presentation/screens/dashboard/system_resource_detail_screen.dart';
 import 'package:sysadmin/presentation/screens/sftp/index.dart';
 import 'package:sysadmin/presentation/screens/ssh_manager/port_forward_screen.dart';
 import 'package:sysadmin/presentation/screens/terminal/index.dart';
@@ -313,9 +314,10 @@ class _SSHConnectionDetailsSheetState extends State<SSHConnectionDetailsSheet> {
                       _buildActionButton(
                         icon: Icons.monitor,
                         title: 'System Monitor',
-                        onTap: () {
-                          // TODO: Implement system monitor logic
-                        },
+                        onTap: () => Navigator.push(
+                          context,
+                          CupertinoPageRoute(builder: (context) => const SystemResourceDetailsScreen())
+                        ),
                       ),
                     ]),
                   ],
